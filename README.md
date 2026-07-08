@@ -1,5 +1,7 @@
 # gp-tray
 
+**English** | [한국어](README.ko.md)
+
 A tiny system-tray indicator for the **official GlobalProtect™ Linux CLI** — connect, disconnect, and see your VPN status without touching a terminal. No Qt, no WebKit, no `libqt5webkit5`.
 
 <p align="center">
