@@ -23,7 +23,7 @@ except (ValueError, ImportError):
 from gi.repository import GLib, Gtk
 
 APP_ID = "gp-tray"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 HOMEPAGE = "https://github.com/tiratano/gp-tray"
 CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "gp-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -217,21 +217,47 @@ class GPTray:
     # ---------- dialogs ----------
 
     def ask_portal(self):
-        dialog = Gtk.Dialog(title="Connect to GlobalProtect portal", modal=True)
-        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                           "Connect", Gtk.ResponseType.OK)
-        dialog.set_default_response(Gtk.ResponseType.OK)
+        # Layout modeled on the classic GlobalProtect welcome popup:
+        # big globe, title, hint, entry, full-width accent Connect button.
+        dialog = Gtk.Dialog(title="GlobalProtect", modal=True)
+        dialog.set_resizable(False)
+        dialog.set_default_size(340, -1)
+
         box = dialog.get_content_area()
-        box.set_spacing(8)
-        box.set_border_width(12)
-        box.add(Gtk.Label(label="Portal address:", xalign=0))
+        box.set_orientation(Gtk.Orientation.VERTICAL)
+        box.set_spacing(12)
+        box.set_border_width(24)
+
+        globe = Gtk.Image.new_from_icon_name("gp-tray-connected",
+                                             Gtk.IconSize.DIALOG)
+        globe.set_pixel_size(96)
+        box.pack_start(globe, False, False, 4)
+
+        title = Gtk.Label()
+        title.set_markup(
+            '<span size="x-large" weight="bold">Welcome to GlobalProtect</span>')
+        box.pack_start(title, False, False, 0)
+
+        hint = Gtk.Label(label="Please enter your portal address")
+        hint.get_style_context().add_class("dim-label")
+        box.pack_start(hint, False, False, 0)
+
         entry = Gtk.Entry()
         entry.set_text(self.cfg.get("portal", ""))
-        entry.set_width_chars(38)
+        entry.set_width_chars(34)
         entry.set_placeholder_text("vpn.example.com")
         entry.set_activates_default(True)
-        box.add(entry)
+        box.pack_start(entry, False, False, 0)
+
+        button = Gtk.Button(label="Connect")
+        button.get_style_context().add_class("suggested-action")
+        button.set_can_default(True)
+        button.connect("clicked",
+                       lambda *_: dialog.response(Gtk.ResponseType.OK))
+        box.pack_start(button, False, False, 4)
+
         dialog.show_all()
+        dialog.set_default(button)
         response = dialog.run()
         portal = entry.get_text().strip()
         dialog.destroy()
