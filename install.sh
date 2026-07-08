@@ -14,7 +14,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 echo "Downloading $url"
 wget -qO "$tmp/gp-tray.deb" "$url"
-sudo apt-get install -y "$tmp/gp-tray.deb"
+if ! sudo apt-get install -y "$tmp/gp-tray.deb"; then
+    echo
+    echo "apt failed — your system may already have packages with broken dependencies." >&2
+    echo "Run 'sudo apt --fix-broken install' first, then re-run this script." >&2
+    exit 1
+fi
 
 if ! command -v globalprotect >/dev/null; then
     echo
