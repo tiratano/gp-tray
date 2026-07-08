@@ -2,13 +2,18 @@
 
 A tiny system-tray indicator for the **official GlobalProtect™ Linux CLI** — connect, disconnect, and see your VPN status without touching a terminal. No Qt, no WebKit, no `libqt5webkit5`.
 
-```
-tray icon (gray globe)  →  Connect…  →  enter portal  →  SAML login in your browser  →  green globe ✓
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/flow-dark.svg">
+    <img alt="How gp-tray works: gray globe idle in the tray → Connect… and enter your portal address → SAML login in your browser → green globe, connected" src="docs/flow-light.svg" width="880">
+  </picture>
+</p>
 
 ## Why this exists
 
-The official GlobalProtect **UI** package for Linux (`GlobalProtect_UI_deb`, up to and including 6.2.9) `Pre-Depends` on **libqt5webkit5** — a library that was abandoned upstream years ago and finally **removed from Ubuntu starting with 25.04**. On Ubuntu 25.04, 25.10, and 26.04 LTS the UI package is simply uninstallable: the old 24.04 `.deb` needs `libicu74`, the pre-2.14 `libxml2`, and the Qt 5.15.13 ABI, all of which are gone.
+The official GlobalProtect **UI** package for Linux (`GlobalProtect_UI_deb`, up to and including 6.2.9) `Pre-Depends` on **libqt5webkit5** — [Palo Alto's own install guide tells you to `apt-get install libqt5webkit5` first](https://knowledgebase.paloaltonetworks.com/KCSArticleDetail?id=kA14u0000004NoDCAU). But QtWebKit was [archived upstream years ago](https://github.com/qtwebkit/qtwebkit) (last release: 5.212 alpha, 2020) and was finally **removed from Ubuntu starting with 25.04** — compare the package page for [Ubuntu 24.04](https://packages.ubuntu.com/noble/libqt5webkit5) with [Ubuntu 26.04](https://packages.ubuntu.com/resolute/libqt5webkit5), and see [this Ask Ubuntu question](https://askubuntu.com/q/1554893) from another user hitting exactly this wall.
+
+So on Ubuntu 25.04, 25.10, and 26.04 LTS the UI package is simply uninstallable — and no, you can't just sideload the 24.04 `.deb`: it needs `libicu74`, the pre-2.14 `libxml2`, and the Qt 5.15.13 ABI, all of which are gone from these releases.
 
 The good news: the official **CLI-only** package (`GlobalProtect_deb`) works perfectly on modern Ubuntu. Everything the UI did can be done with two commands:
 
