@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 
 import gi
@@ -20,10 +21,10 @@ try:
 except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AppIndicator
-from gi.repository import GLib, Gtk
+from gi.repository import Gio, GLib, Gtk
 
 APP_ID = "gp-tray"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 HOMEPAGE = "https://github.com/tiratano/gp-tray"
 CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "gp-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -33,12 +34,14 @@ CONNECT_TIMEOUT = 300  # SAML login in a browser can take a while
 ICONS = {
     "connected": "gp-tray-connected",
     "connecting": "gp-tray-connecting",
+    "disconnecting": "gp-tray-connecting",
     "disconnected": "gp-tray-disconnected",
     "unavailable": "gp-tray-unavailable",
 }
 STATE_LABELS = {
     "connected": "Connected",
     "connecting": "Connecting…",
+    "disconnecting": "Disconnecting…",
     "disconnected": "Not connected",
     "unavailable": "GlobalProtect service unavailable",
 }
@@ -110,7 +113,7 @@ class GPTray:
         about_item = Gtk.MenuItem(label="About")
         about_item.connect("activate", self.on_about)
         quit_item = Gtk.MenuItem(label="Quit")
-        quit_item.connect("activate", Gtk.main_quit)
+        quit_item.connect("activate", self.on_quit)
 
         for item in (self.status_item, Gtk.SeparatorMenuItem(),
                      self.connect_item, self.disconnect_item,
@@ -186,6 +189,7 @@ class GPTray:
         if self.busy:
             return
         self.busy = True
+        self.apply_state("disconnecting")
         threading.Thread(target=self._disconnect_worker, daemon=True).start()
 
     def _disconnect_worker(self):
@@ -274,12 +278,25 @@ class GPTray:
             license_type=Gtk.License.MIT_X11,
             logo_icon_name="gp-tray-connected",
         )
+        about.set_border_width(16)
         about.run()
         about.destroy()
+
+    def on_quit(self, _item):
+        # Hide the indicator before exiting so no stale icon lingers.
+        self.indicator.set_status(AppIndicator.IndicatorStatus.PASSIVE)
+        Gtk.main_quit()
 
 
 def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # Single-instance guard: a second launch (e.g. autostart plus a manual
+    # run) would leave an orphaned tray icon behind after Quit.
+    app = Gio.Application(application_id="io.github.tiratano.gptray")
+    app.register()
+    if app.get_is_remote():
+        print("gp-tray is already running.", file=sys.stderr)
+        sys.exit(0)
     GPTray()
     Gtk.main()
 
