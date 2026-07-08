@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+# gp-tray — a tiny tray indicator for the official GlobalProtect Linux CLI.
+#
+# GlobalProtect is a trademark of Palo Alto Networks, Inc.
+# This project is not affiliated with or endorsed by Palo Alto Networks.
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import threading
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator
+except (ValueError, ImportError):
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import AppIndicator3 as AppIndicator
+from gi.repository import GLib, Gtk
+
+APP_ID = "gp-tray"
+VERSION = "0.1.0"
+HOMEPAGE = "https://github.com/tiratano/gp-tray"
+CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "gp-tray")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+POLL_SECONDS = 5
+CONNECT_TIMEOUT = 300  # SAML login in a browser can take a while
+
+ICONS = {
+    "connected": "gp-tray-connected",
+    "connecting": "gp-tray-connecting",
+    "disconnected": "gp-tray-disconnected",
+    "unavailable": "gp-tray-unavailable",
+}
+STATE_LABELS = {
+    "connected": "Connected",
+    "connecting": "Connecting…",
+    "disconnected": "Not connected",
+    "unavailable": "GlobalProtect service unavailable",
+}
+
+
+def load_config():
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(cfg):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def notify(summary, body=""):
+    if shutil.which("notify-send"):
+        subprocess.Popen(
+            ["notify-send", "--app-name", "gp-tray", "--icon", "gp-tray-connected",
+             summary, body],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+
+def gp_status():
+    """Return one of: connected / disconnected / unavailable."""
+    if not shutil.which("globalprotect"):
+        return "unavailable"
+    try:
+        out = subprocess.run(
+            ["globalprotect", "show", "--status"],
+            capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+        ).stdout.lower()
+    except (OSError, subprocess.TimeoutExpired):
+        return "unavailable"
+    if "cannot connect" in out:
+        return "unavailable"
+    if "disconnected" in out or "not connected" in out:
+        return "disconnected"
+    if "connected" in out:
+        return "connected"
+    return "disconnected"  # e.g. "OnDemand mode." while idle
+
+
+class GPTray:
+    def __init__(self):
+        self.cfg = load_config()
+        self.state = "disconnected"
+        self.busy = False
+
+        self.indicator = AppIndicator.Indicator.new(
+            APP_ID, ICONS["disconnected"],
+            AppIndicator.IndicatorCategory.APPLICATION_STATUS,
+        )
+        self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+        self.indicator.set_title("GlobalProtect (gp-tray)")
+
+        self.menu = Gtk.Menu()
+        self.status_item = Gtk.MenuItem(label="Checking status…")
+        self.status_item.set_sensitive(False)
+        self.connect_item = Gtk.MenuItem(label="Connect…")
+        self.connect_item.connect("activate", self.on_connect)
+        self.disconnect_item = Gtk.MenuItem(label="Disconnect")
+        self.disconnect_item.connect("activate", self.on_disconnect)
+        about_item = Gtk.MenuItem(label="About")
+        about_item.connect("activate", self.on_about)
+        quit_item = Gtk.MenuItem(label="Quit")
+        quit_item.connect("activate", Gtk.main_quit)
+
+        for item in (self.status_item, Gtk.SeparatorMenuItem(),
+                     self.connect_item, self.disconnect_item,
+                     Gtk.SeparatorMenuItem(), about_item, quit_item):
+            self.menu.append(item)
+        self.menu.show_all()
+        self.indicator.set_menu(self.menu)
+        # Middle-click on the tray icon triggers connect/disconnect.
+        self.indicator.set_secondary_activate_target(self.connect_item)
+
+        self.apply_state("disconnected")
+        self.poll()
+        GLib.timeout_add_seconds(POLL_SECONDS, self.poll)
+
+    # ---------- state / UI ----------
+
+    def apply_state(self, state):
+        self.state = state
+        self.indicator.set_icon_full(ICONS[state], STATE_LABELS[state])
+        self.status_item.set_label(STATE_LABELS[state])
+        connected = state == "connected"
+        self.connect_item.set_sensitive(not connected and not self.busy)
+        self.disconnect_item.set_sensitive(connected and not self.busy)
+        self.indicator.set_secondary_activate_target(
+            self.disconnect_item if connected else self.connect_item)
+
+    def poll(self):
+        if not self.busy:
+            threading.Thread(target=self._poll_worker, daemon=True).start()
+        return True  # keep the GLib timer running
+
+    def _poll_worker(self):
+        state = gp_status()
+        GLib.idle_add(self._poll_done, state)
+
+    def _poll_done(self, state):
+        if not self.busy:
+            self.apply_state(state)
+        return False
+
+    # ---------- actions ----------
+
+    def on_connect(self, _item):
+        if self.busy:
+            return
+        portal = self.ask_portal()
+        if not portal:
+            return
+        self.cfg["portal"] = portal
+        save_config(self.cfg)
+        self.busy = True
+        self.apply_state("connecting")
+        notify("Connecting…", f"Portal: {portal}\n"
+               "If your portal uses SAML, finish the login in your browser.")
+        threading.Thread(target=self._connect_worker, args=(portal,),
+                         daemon=True).start()
+
+    def _connect_worker(self, portal):
+        try:
+            proc = subprocess.run(
+                ["globalprotect", "connect", "--portal", portal],
+                capture_output=True, text=True, timeout=CONNECT_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+            )
+            output = (proc.stdout + proc.stderr).strip()
+        except subprocess.TimeoutExpired:
+            output = "Timed out waiting for the connection."
+        except OSError as e:
+            output = str(e)
+        GLib.idle_add(self._action_done, "connect", output)
+
+    def on_disconnect(self, _item):
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._disconnect_worker, daemon=True).start()
+
+    def _disconnect_worker(self):
+        try:
+            proc = subprocess.run(
+                ["globalprotect", "disconnect"],
+                capture_output=True, text=True, timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+            output = (proc.stdout + proc.stderr).strip()
+        except (OSError, subprocess.TimeoutExpired) as e:
+            output = str(e)
+        GLib.idle_add(self._action_done, "disconnect", output)
+
+    def _action_done(self, action, output):
+        self.busy = False
+        state = gp_status()
+        self.apply_state(state)
+        if action == "connect":
+            if state == "connected":
+                notify("Connected", "Network connection secured.")
+            else:
+                notify("Connection failed", output[-300:] or "Unknown error.")
+        else:
+            notify("Disconnected" if state != "connected" else "Disconnect failed",
+                   output[-300:])
+        return False
+
+    # ---------- dialogs ----------
+
+    def ask_portal(self):
+        dialog = Gtk.Dialog(title="Connect to GlobalProtect portal", modal=True)
+        dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+                           "Connect", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        box.set_spacing(8)
+        box.set_border_width(12)
+        box.add(Gtk.Label(label="Portal address:", xalign=0))
+        entry = Gtk.Entry()
+        entry.set_text(self.cfg.get("portal", ""))
+        entry.set_width_chars(38)
+        entry.set_placeholder_text("vpn.example.com")
+        entry.set_activates_default(True)
+        box.add(entry)
+        dialog.show_all()
+        response = dialog.run()
+        portal = entry.get_text().strip()
+        dialog.destroy()
+        return portal if response == Gtk.ResponseType.OK else None
+
+    def on_about(self, _item):
+        about = Gtk.AboutDialog(
+            program_name="gp-tray",
+            version=VERSION,
+            comments="Tray indicator for the official GlobalProtect Linux CLI.\n"
+                     "GlobalProtect is a trademark of Palo Alto Networks, Inc.\n"
+                     "This project is not affiliated with Palo Alto Networks.",
+            website=HOMEPAGE,
+            license_type=Gtk.License.MIT_X11,
+            logo_icon_name="gp-tray-connected",
+        )
+        about.run()
+        about.destroy()
+
+
+def main():
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    GPTray()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

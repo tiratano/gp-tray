@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=GP Tray
+GenericName=VPN Tray Indicator
+Comment=Tray indicator for the official GlobalProtect Linux CLI
+Exec=gp-tray
+Icon=gp-tray-connected
+Terminal=false
+Categories=Network;
+Keywords=vpn;globalprotect;tray;
+X-GNOME-Autostart-enabled=true
