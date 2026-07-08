@@ -77,6 +77,10 @@ sudo apt install ./dist/gp-tray_*_all.deb
   printf '[Service]\nRestart=always\nRestartSec=3\n' > ~/.config/systemd/user/gpa.service.d/override.conf
   systemctl --user daemon-reload && systemctl --user restart gpa
   ```
+- **"Connecting…"에서 멈추고 `globalprotect disconnect`도 안 먹힘** — PanGPS 데몬이 내부적으로 깨진 세션을 물고 "이미 연결돼 있다"고 착각하면서 모든 요청을 거부하는 경우가 있습니다. gp-tray 메뉴의 **Restart GlobalProtect service**를 누르거나 수동으로:
+  ```bash
+  sudo systemctl restart gpd && systemctl --user restart gpa
+  ```
 - **설치 중 "Unmet dependencies" 에러** — 시스템에 이미 의존성이 깨진 다른 패키지가 있는 경우입니다(예: `dpkg -i`로 설치한 VirtualBox 등). `sudo apt --fix-broken install`로 정리한 뒤 다시 설치하세요.
 - **GNOME에서 트레이 아이콘이 안 보임** — AppIndicator 확장이 켜져 있는지 확인하세요(Ubuntu에는 기본 설치): `gnome-extensions enable ubuntu-appindicators@ubuntu.com`
 - **Connect를 눌러도 반응 없음** — 먼저 터미널에서 `globalprotect connect --portal <포털주소>`가 되는지 확인하세요. 포털 쪽 인증 문제는 gp-tray가 해결할 수 없습니다.

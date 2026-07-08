@@ -77,6 +77,10 @@ Then log out/in (or run `gp-tray` once). Tested on Ubuntu 26.04 LTS with GNOME; 
   printf '[Service]\nRestart=always\nRestartSec=3\n' > ~/.config/systemd/user/gpa.service.d/override.conf
   systemctl --user daemon-reload && systemctl --user restart gpa
   ```
+- **Stuck at "Connecting…" and even `globalprotect disconnect` does nothing** — the PanGPS daemon can wedge itself (it keeps a broken session internally, believes a tunnel is "already established", and rejects every new request). Use **Restart GlobalProtect service** in the gp-tray menu, or manually:
+  ```bash
+  sudo systemctl restart gpd && systemctl --user restart gpa
+  ```
 - **"Unmet dependencies" during install** — your system already has another package with broken dependencies (e.g. VirtualBox installed via `dpkg -i`). Run `sudo apt --fix-broken install` first, then install gp-tray again.
 - **No tray icon on GNOME** — make sure the AppIndicator extension is enabled (preinstalled on Ubuntu): `gnome-extensions enable ubuntu-appindicators@ubuntu.com`
 - **Connect does nothing** — check that `globalprotect connect --portal <your-portal>` works in a terminal first; gp-tray can't fix portal-side auth issues.

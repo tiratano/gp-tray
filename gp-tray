@@ -24,7 +24,7 @@ except (ValueError, ImportError):
 from gi.repository import Gio, GLib, Gtk
 
 APP_ID = "gp-tray"
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 HOMEPAGE = "https://github.com/tiratano/gp-tray"
 CONFIG_DIR = os.path.join(GLib.get_user_config_dir(), "gp-tray")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -110,6 +110,8 @@ class GPTray:
         self.connect_item.connect("activate", self.on_connect)
         self.disconnect_item = Gtk.MenuItem(label="Disconnect")
         self.disconnect_item.connect("activate", self.on_disconnect)
+        self.restart_item = Gtk.MenuItem(label="Restart GlobalProtect service")
+        self.restart_item.connect("activate", self.on_restart_service)
         about_item = Gtk.MenuItem(label="About")
         about_item.connect("activate", self.on_about)
         quit_item = Gtk.MenuItem(label="Quit")
@@ -117,7 +119,8 @@ class GPTray:
 
         for item in (self.status_item, Gtk.SeparatorMenuItem(),
                      self.connect_item, self.disconnect_item,
-                     Gtk.SeparatorMenuItem(), about_item, quit_item):
+                     Gtk.SeparatorMenuItem(), self.restart_item,
+                     about_item, quit_item):
             self.menu.append(item)
         self.menu.show_all()
         self.indicator.set_menu(self.menu)
@@ -137,6 +140,7 @@ class GPTray:
         connected = state == "connected"
         self.connect_item.set_sensitive(not connected and not self.busy)
         self.disconnect_item.set_sensitive(connected and not self.busy)
+        self.restart_item.set_sensitive(not self.busy)
         self.indicator.set_secondary_activate_target(
             self.disconnect_item if connected else self.connect_item)
 
@@ -181,6 +185,14 @@ class GPTray:
             output = (proc.stdout + proc.stderr).strip()
         except subprocess.TimeoutExpired:
             output = "Timed out waiting for the connection."
+            # Best-effort cleanup so a half-open session doesn't wedge the
+            # daemon into rejecting every future connect.
+            try:
+                subprocess.run(["globalprotect", "disconnect"],
+                               capture_output=True, text=True, timeout=30,
+                               stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         except OSError as e:
             output = str(e)
         GLib.idle_add(self._action_done, "connect", output)
@@ -212,10 +224,57 @@ class GPTray:
             if state == "connected":
                 notify("Connected", "Network connection secured.")
             else:
-                notify("Connection failed", output[-300:] or "Unknown error.")
+                notify("Connection failed",
+                       (output[-260:] or "Unknown error.") + "\n"
+                       "Stuck? Try 'Restart GlobalProtect service' in the menu.")
         else:
             notify("Disconnected" if state != "connected" else "Disconnect failed",
                    output[-300:])
+        return False
+
+    def on_restart_service(self, _item):
+        # Escape hatch for a wedged PanGPS daemon (e.g. stuck believing a
+        # tunnel is "already established" and rejecting connect/disconnect).
+        if self.busy:
+            return
+        self.busy = True
+        self.status_item.set_label("Restarting GlobalProtect service…")
+        self.connect_item.set_sensitive(False)
+        self.disconnect_item.set_sensitive(False)
+        self.restart_item.set_sensitive(False)
+        threading.Thread(target=self._restart_service_worker,
+                         daemon=True).start()
+
+    def _restart_service_worker(self):
+        errors = []
+        cmds = [["systemctl", "--user", "restart", "gpa"]]
+        if shutil.which("pkexec"):
+            # Root part first: restart the system daemon, then the user agent.
+            cmds.insert(0, ["pkexec", "systemctl", "restart", "gpd"])
+        else:
+            errors.append("pkexec not found — run manually: "
+                          "sudo systemctl restart gpd")
+        for cmd in cmds:
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True,
+                                      timeout=120, stdin=subprocess.DEVNULL)
+                if proc.returncode != 0:
+                    errors.append((proc.stdout + proc.stderr).strip()
+                                  or " ".join(cmd) + " failed")
+            except (OSError, subprocess.TimeoutExpired) as e:
+                errors.append(str(e))
+        GLib.idle_add(self._restart_service_done, errors)
+
+    def _restart_service_done(self, errors):
+        self.busy = False
+        self.apply_state(gp_status())
+        if errors:
+            notify("Service restart had problems",
+                   "\n".join(errors)[-260:] + "\n"
+                   "Manual fix: sudo systemctl restart gpd")
+        else:
+            notify("GlobalProtect service restarted",
+                   "You can try connecting again now.")
         return False
 
     # ---------- dialogs ----------
